@@ -34,6 +34,16 @@
             border-right: 1px solid #ccc;
         }
 
+        .sidebar-header {
+            font-size: 18px;
+            font-weight: 800;
+            color: var(--node-color);
+            margin: 0 0 10px 0;
+            line-height: 1.2;
+            border-bottom: 2px solid #bbb;
+            padding-bottom: 15px;
+        }
+
         .input-group {
             display: flex;
             justify-content: space-between;
@@ -96,6 +106,8 @@
 <body>
 
     <div id="sidebar">
+        <div class="sidebar-header">Clos Topology Visualizer</div>
+
         <div class="input-group">
             <label>Tree Depth</label>
             <input type="number" id="depth" value="3" min="2" max="3">
