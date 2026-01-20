@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clos Topology Visualizer</title>
+    <style>
+        :root {
+            --sidebar-bg: #e8e8e8;
+            --node-color: #0a0a4d;
+            --link-color: #999;
+            --text-color: #333;
+            --label-color: #444;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+            margin: 0;
+            display: flex;
+            height: 100vh;
+            background-color: white;
+            overflow: hidden;
+        }
+
+        #sidebar {
+            width: 260px;
+            min-width: 260px;
+            background-color: var(--sidebar-bg);
+            padding: 25px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            z-index: 10;
+            border-right: 1px solid #ccc;
+        }
+
+        .input-group {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .input-group input {
+            width: 60px;
+            padding: 4px;
+            border: 1px solid #ccc;
+            text-align: right;
+        }
+
+        .stats {
+            margin-top: 5px;
+            border-top: 1px solid #bbb;
+            padding-top: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .stat-line {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+        }
+
+        .stat-header {
+            font-weight: bold;
+            font-size: 11px;
+            color: #666;
+            margin-top: 8px;
+            text-transform: uppercase;
+        }
+
+        #viz-container {
+            flex-grow: 1;
+            overflow: auto;
+            padding: 20px;
+            background-color: white;
+            position: relative;
+        }
+
+        svg {
+            display: block;
+        }
+
+        .pod-rect { stroke-width: 1; rx: 8; ry: 8; pointer-events: none; }
+        .link { stroke: var(--link-color); stroke-width: 1; opacity: 0.25; }
+        .node { fill: var(--node-color); rx: 2; ry: 2; }
+        .host { fill: #4a1a1a; }
+        .host-count { font-size: 11px; text-anchor: middle; fill: #333; font-weight: bold; }
+        .row-label { font-size: 12px; fill: var(--label-color); font-weight: bold; }
+        .ellipsis-dot { fill: #4a1a1a; }
+        
+        .footer { margin-top: auto; font-size: 11px; color: #888; text-align: left; line-height: 1.4; }
+    </style>
+</head>
+<body>
+
+    <div id="sidebar">
+        <div class="input-group">
+            <label>Tree Depth</label>
+            <input type="number" id="depth" value="3" min="2" max="3">
+        </div>
+        <div class="input-group">
+            <label>Ports per Switch</label>
+            <input type="number" id="radix" value="4" min="2" step="2">
+        </div>
+
+        <div class="stats" id="stats-panel"></div>
+
+        <div class="footer">
+            Clos Topology Visualizer
+        </div>
+    </div>
+
+    <div id="viz-container">
+        <div id="msg-area"></div>
+        <svg id="canvas"></svg>
+    </div>
+
+<script>
+    const canvas = document.getElementById('canvas');
+    const msgArea = document.getElementById('msg-area');
+    const depthInput = document.getElementById('depth');
+    const radixInput = document.getElementById('radix');
+    const statsPanel = document.getElementById('stats-panel');
+
+    const MAX_RENDER_NODES = 10000; // Increased limit
+    const LABEL_X = 20; 
+    const DRAWING_OFFSET_X = 180; 
+
+    function fmt(num) {
+        return num.toLocaleString('en-US');
+    }
+
+    function update() {
+        const k = parseInt(radixInput.value) || 0;
+        const depth = parseInt(depthInput.value);
+        
+        let t0, t1, t2, hosts, cables, pods;
+
+        if (depth === 3) {
+            pods = k;
+            t0 = (k * k) / 2;
+            t1 = (k * k) / 2;
+            t2 = (k * k) / 4;
+            hosts = (k * k * k) / 4;
+            cables = (3 * k * k * k) / 4;
+        } else {
+            pods = k;
+            t0 = k;
+            t1 = k / 2;
+            t2 = 0;
+            hosts = (k * k) / 2;
+            cables = (k * k / 2) + hosts;
+        }
+
+        statsPanel.innerHTML = `
+            <div class="stat-line"><span>Hosts</span> <span>${fmt(hosts)}</span></div>
+            <div class="stat-header">Switches</div>
+            <div class="stat-line"><span>Tier-0 (Leaf)</span> <span>${fmt(t0)}</span></div>
+            <div class="stat-line"><span>Tier-1 (Spine)</span> <span>${fmt(t1)}</span></div>
+            ${depth === 3 ? `<div class="stat-line"><span>Tier-2 (Superspine)</span> <span>${fmt(t2)}</span></div>` : ''}
+            <div class="stat-line" style="border-top: 1px solid #ddd; margin-top:4px; padding-top:4px;">
+                <strong>Total Switches</strong> <strong>${fmt(t0 + t1 + t2)}</strong>
+            </div>
+            <div class="stat-line"><span>Pods</span> <span>${fmt(pods)}</span></div>
+            <div class="stat-line"><span>Total Cables</span> <span>${fmt(cables)}</span></div>
+        `;
+
+        const totalNodes = t0 + t1 + t2 + hosts;
+        if (totalNodes > MAX_RENDER_NODES) {
+            canvas.style.display = 'none';
+            msgArea.innerHTML = `<div class="warning-msg" style="position:absolute; left: 50%; top: 100px; transform: translateX(-50%); color: #666; font-style: italic;">Topology too large to render (${fmt(totalNodes)} elements).</div>`;
+        } else {
+            canvas.style.display = 'block';
+            msgArea.innerHTML = '';
+            draw(k, depth, t0, t1, t2, hosts);
+        }
+    }
+
+    function getX(index, total, startX, endX) {
+        if (total <= 1) return (startX + endX) / 2;
+        return startX + (index * (endX - startX) / (total - 1));
+    }
+
+    function drawRowLabel(y, text, count) {
+        const txt = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        txt.setAttribute('x', LABEL_X);
+        txt.setAttribute('y', y + 4);
+        txt.setAttribute('class', 'row-label');
+        txt.textContent = `${text} (${fmt(count)})`;
+        canvas.appendChild(txt);
+    }
+
+    function draw(k, depth, t0, t1, t2, totalHosts) {
+        canvas.innerHTML = '';
+        if (k <= 0) return;
+
+        const nodeSpacing = 40;
+        const podPadding = 60;
+        let totalWidth;
+        
+        if (depth === 3) {
+            const podWidth = (k/2) * nodeSpacing;
+            totalWidth = (k/2) * (podWidth + podPadding) - podPadding;
+        } else {
+            totalWidth = (k/2) * 150;
+        }
+        
+        const svgWidth = Math.max(1000, totalWidth + DRAWING_OFFSET_X + 100);
+        const svgHeight = 900; 
+        canvas.setAttribute('width', svgWidth);
+        canvas.setAttribute('height', svgHeight);
+
+        if (depth === 3) {
+            drawUnfoldedThreeTier(k, svgWidth, t0, t1, t2, totalHosts);
+        } else {
+            drawUnfoldedTwoTier(k, svgWidth, t0, t1, totalHosts);
+        }
+    }
+
+    function drawUnfoldedTwoTier(k, width, t0, t1, totalHosts) {
+        const numLeavesHalf = k / 2;
+        const hostsPerLeaf = k / 2;
+        const yLayers = { topH: 160, topL: 200, spine: 450, botL: 700, botH: 740 };
+
+        const leafTotalWidth = (numLeavesHalf - 1) * 150;
+        const startX = DRAWING_OFFSET_X;
+        const endX = startX + leafTotalWidth;
+
+        const spines = [];
+        for (let i = 0; i < t1; i++) {
+            const pos = { x: getX(i, t1, startX, endX), y: yLayers.spine };
+            spines.push(pos);
+            drawNode(pos.x, pos.y);
+        }
+        drawRowLabel(yLayers.spine, "tier-1/spine", t1);
+
+        const drawHalf = (isTop) => {
+            const leafY = isTop ? yLayers.topL : yLayers.botL;
+            const hostY = isTop ? yLayers.topH : yLayers.botH;
+
+            drawRowLabel(leafY, "tier-0/leaf", numLeavesHalf);
+            drawRowLabel(hostY, "Hosts", totalHosts / 2);
+
+            for (let i = 0; i < numLeavesHalf; i++) {
+                const lx = startX + i * 150;
+                const leafPos = { x: lx, y: leafY };
+                spines.forEach(s => drawLink(leafPos, s));
+                drawHostGroup(leafPos.x, hostY, hostsPerLeaf, leafPos, isTop);
+                drawNode(leafPos.x, leafPos.y);
+            }
+        };
+
+        drawHalf(true); drawHalf(false);
+    }
+
+    function drawUnfoldedThreeTier(k, width, t0, t1, t2, totalHosts) {
+        const yLayers = { tH: 60, tE: 100, tA: 280, core: 450, bA: 620, bE: 800, bH: 840 };
+
+        const nodeSpacing = 40;
+        const podWidth = (k/2) * nodeSpacing;
+        const podPadding = 60;
+        const numPodsPerHalf = k/2;
+        const totalWidthUsedByPods = (numPodsPerHalf * podWidth) + ((numPodsPerHalf - 1) * podPadding);
+        
+        const startX = DRAWING_OFFSET_X;
+        const endX = startX + totalWidthUsedByPods;
+
+        const firstSwitchX = startX + 20;
+        const lastSwitchX = endX - 20;
+
+        const cores = [];
+        for (let i = 0; i < t2; i++) {
+            const pos = { x: getX(i, t2, firstSwitchX, lastSwitchX), y: yLayers.core };
+            cores.push(pos);
+            drawNode(pos.x, pos.y);
+        }
+        drawRowLabel(yLayers.core, "tier-2/superspine", t2);
+
+        const drawHalf = (isTop) => {
+            const edgeY = isTop ? yLayers.tE : yLayers.bE;
+            const aggY = isTop ? yLayers.tA : yLayers.bA;
+            const hostY = isTop ? yLayers.tH : yLayers.bH;
+
+            drawRowLabel(edgeY, "tier-0/leaf", t0 / 2);
+            drawRowLabel(aggY, "tier-1/spine", t1 / 2);
+            drawRowLabel(hostY, "Hosts", totalHosts / 2);
+
+            for (let p = 0; p < k/2; p++) {
+                const px = startX + p * (podWidth + podPadding);
+                const rectY = Math.min(edgeY, aggY) - 20;
+                const rectH = Math.abs(edgeY - aggY) + 40;
+                drawPodRect(px, rectY, podWidth, rectH, isTop ? 'rgba(255,0,0,0.03)' : 'rgba(0,0,255,0.03)');
+
+                const aggs = [], edges = [];
+                for (let i = 0; i < k/2; i++) {
+                    aggs.push({ x: px + 20 + (i * 40), y: aggY });
+                    edges.push({ x: px + 20 + (i * 40), y: edgeY });
+                }
+
+                aggs.forEach((agg, aIdx) => {
+                    const stride = k / 2;
+                    for (let c = 0; c < stride; c++) drawLink(agg, cores[aIdx * stride + c]);
+                    edges.forEach(e => drawLink(agg, e));
+                    drawNode(agg.x, agg.y);
+                });
+
+                edges.forEach(edge => {
+                    drawHostGroup(edge.x, hostY, k/2, edge, isTop);
+                    drawNode(edge.x, edge.y);
+                });
+            }
+        };
+
+        drawHalf(true); drawHalf(false);
+    }
+
+    function drawPodRect(x, y, w, h, color) {
+        const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        rect.setAttribute('x', x); rect.setAttribute('y', y);
+        rect.setAttribute('width', w); rect.setAttribute('height', h);
+        rect.setAttribute('fill', color);
+        rect.setAttribute('stroke', color.replace('0.03', '0.2'));
+        rect.setAttribute('class', 'pod-rect');
+        canvas.appendChild(rect);
+    }
+
+    function drawHostGroup(centerX, centerY, count, parentNode, isTop) {
+        const spacing = 12;
+        if (count <= 3) {
+            const startX = centerX - ((count - 1) * spacing) / 2;
+            for (let i = 0; i < count; i++) {
+                const hx = startX + i * spacing;
+                drawLink({x: hx, y: centerY}, parentNode);
+                drawHost(hx, centerY);
+            }
+        } else {
+            const offset = 10;
+            const h1x = centerX - offset, h2x = centerX + offset;
+            drawLink({x: h1x, y: centerY}, parentNode);
+            drawLink({x: h2x, y: centerY}, parentNode);
+            drawHost(h1x, centerY);
+            drawHost(h2x, centerY);
+            const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            dot.setAttribute('cx', centerX); dot.setAttribute('cy', centerY);
+            dot.setAttribute('r', 1.2); dot.setAttribute('class', 'ellipsis-dot');
+            canvas.appendChild(dot);
+            const txt = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            txt.setAttribute('x', centerX);
+            txt.setAttribute('y', isTop ? centerY - 10 : centerY + 18);
+            txt.setAttribute('class', 'host-count');
+            txt.textContent = fmt(count);
+            canvas.appendChild(txt);
+        }
+    }
+
+    function drawLink(n1, n2) {
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute('x1', n1.x); line.setAttribute('y1', n1.y);
+        line.setAttribute('x2', n2.x); line.setAttribute('y2', n2.y);
+        line.setAttribute('class', 'link');
+        canvas.prepend(line);
+    }
+
+    function drawNode(x, y) {
+        const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        rect.setAttribute('x', x - 5); rect.setAttribute('y', y - 5);
+        rect.setAttribute('width', 10); rect.setAttribute('height', 10);
+        rect.setAttribute('class', 'node');
+        canvas.appendChild(rect);
+    }
+
+    function drawHost(x, y) {
+        const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        circle.setAttribute('cx', x); circle.setAttribute('cy', y);
+        circle.setAttribute('r', 2.5); circle.setAttribute('class', 'host');
+        canvas.appendChild(circle);
+    }
+
+    [depthInput, radixInput].forEach(el => el.addEventListener('input', update));
+    update();
+</script>
+</body>
+</html>
