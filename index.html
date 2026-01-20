@@ -158,7 +158,7 @@
             hosts = (k * k * k) / 4;
             cables = (3 * k * k * k) / 4;
         } else {
-            pods = k;
+            pods = 0;
             t0 = k;
             t1 = k / 2;
             t2 = 0;
@@ -175,7 +175,7 @@
             <div class="stat-line" style="border-top: 1px solid #ddd; margin-top:4px; padding-top:4px;">
                 <strong>Total Switches</strong> <strong>${fmt(t0 + t1 + t2)}</strong>
             </div>
-            <div class="stat-line"><span>Pods</span> <span>${fmt(pods)}</span></div>
+            ${depth === 3 ? `<div class="stat-line"><span>Pods</span> <span>${fmt(pods)}</span></div>` : ''}
             <div class="stat-line"><span>Total Cables</span> <span>${fmt(cables)}</span></div>
         `;
 
